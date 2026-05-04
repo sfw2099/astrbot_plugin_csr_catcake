@@ -68,7 +68,7 @@ CAKES = [
 
 
 @register("astrbot_plugin_csr_catcake", "ALin",
-          "星穹铁道猫猫糕查询 - /找猫糕 服务器 角色/猫猫糕", "1.0.0")
+          "星穹铁道猫猫糕查询 - /找猫糕 服务器 角色/猫猫糕", "1.0.1")
 class CatCakePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -152,6 +152,50 @@ class CatCakePlugin(Star):
         except Exception as e:
             logger.warning(f"[catcake] download failed: {url} -> {e}")
         return False
+
+    def _compose_card(self, cells, record_id, tmpdir):
+        """
+        Compose cake + tail images into a single card:
+          [Cake1] [Cake2] [Cake3]   <- top row
+          [Tail1] [Tail2] [Tail3]   <- bottom row
+        """
+        from PIL import Image
+
+        n = len(cells)
+        cell_w, cell_h = 200, 200
+        padding = 10
+        gap = 6
+
+        total_w = cell_w * n + gap * (n - 1) + padding * 2
+        total_h = cell_h * 2 + gap + padding * 2
+
+        canvas = Image.new("RGBA", (total_w, total_h), (32, 32, 36, 255))
+
+        for col, (cake_path, tail_path, cake_name, char_name) in enumerate(cells):
+            x = padding + col * (cell_w + gap)
+
+            try:
+                img = Image.open(cake_path).convert("RGBA")
+                img = img.resize((cell_w, cell_h), Image.LANCZOS)
+                canvas.paste(img, (x, padding), img)
+            except Exception as e:
+                logger.warning(f"[catcake] paste cake failed: {e}")
+
+            try:
+                img = Image.open(tail_path).convert("RGBA")
+                img.thumbnail((cell_w, cell_h), Image.LANCZOS)
+                tw, th = img.size
+                tx = x + (cell_w - tw) // 2
+                ty = padding + cell_h + gap + (cell_h - th) // 2
+                clean = Image.new("RGBA", (cell_w, cell_h), (0, 0, 0, 0))
+                clean.paste(img, ((cell_w - tw) // 2, (cell_h - th) // 2), img)
+                canvas.paste(clean, (x, padding + cell_h + gap), clean)
+            except Exception as e:
+                logger.warning(f"[catcake] paste tail failed: {e}")
+
+        out_path = os.path.join(tmpdir, f"card_{record_id}.png")
+        canvas.save(out_path, "PNG")
+        return out_path
 
     @filter.command("找猫糕")
     async def find_catcake(self, event: AstrMessageEvent):
@@ -246,7 +290,11 @@ class CatCakePlugin(Star):
             yield event.plain_result(text)
 
             if send_img:
+                cells = []
                 for cn in r["cakes"]:
+                    cn = (cn or "").strip()
+                    if not cn:
+                        continue
                     ci = self.cake_lookup.get(cn)
                     if not ci:
                         continue
@@ -260,17 +308,19 @@ class CatCakePlugin(Star):
                     dl1 = await self._download_image(cake_url, cake_path)
                     dl2 = await self._download_image(tail_url, tail_path)
 
-                    if dl1:
-                        yield event.image_result(cake_path)
-                    if dl2:
-                        yield event.image_result(tail_path)
-
-                    if not dl1 and not dl2:
+                    if dl1 and dl2:
+                        cells.append((cake_path, tail_path, cn, char_name))
+                    elif not dl1 and not dl2:
                         yield event.plain_result(
                             f"  {cn}: {cake_url}\n  尾巴: {tail_url}"
                         )
 
-                await asyncio.sleep(0.3)
+                if cells:
+                    composite_path = self._compose_card(cells, r["id"], tmpdir)
+                    if composite_path:
+                        yield event.image_result(composite_path)
+                elif not any(dl1 and dl2 for cn in r["cakes"] if (cn or "").strip()):
+                    pass  # already emitted text URLs above
 
             if i < len(results):
                 await asyncio.sleep(0.3)
