@@ -185,8 +185,6 @@ class CatCakePlugin(Star):
                 img = Image.open(tail_path).convert("RGBA")
                 img.thumbnail((cell_w, cell_h), Image.LANCZOS)
                 tw, th = img.size
-                tx = x + (cell_w - tw) // 2
-                ty = padding + cell_h + gap + (cell_h - th) // 2
                 clean = Image.new("RGBA", (cell_w, cell_h), (0, 0, 0, 0))
                 clean.paste(img, ((cell_w - tw) // 2, (cell_h - th) // 2), img)
                 canvas.paste(clean, (x, padding + cell_h + gap), clean)
@@ -319,8 +317,6 @@ class CatCakePlugin(Star):
                     composite_path = self._compose_card(cells, r["id"], tmpdir)
                     if composite_path:
                         yield event.image_result(composite_path)
-                elif not any(dl1 and dl2 for cn in r["cakes"] if (cn or "").strip()):
-                    pass  # already emitted text URLs above
 
             if i < len(results):
                 await asyncio.sleep(0.3)
