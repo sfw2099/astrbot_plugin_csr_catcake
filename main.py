@@ -401,13 +401,14 @@ class CatCakePlugin(Star):
         tmpdir = os.path.join(tempfile.gettempdir(), "astrbot_catcake")
         os.makedirs(tmpdir, exist_ok=True)
 
+        chain = []
         for i, r in enumerate(results, 1):
             tag = self._server_tag(r.get("uid", ""))
             anji_note = " [今日限定]" if r.get("isAnji") else ""
             text = f"{i}. {r['name']}{anji_note} | UID: {r['uid']} | {tag}\n"
             text += f"   猫猫糕：{'、'.join(r['cakes'])}"
 
-            chain = [Plain(text)]
+            chain.append(Plain(text))
             if send_img:
                 cake_paths = []
                 for cn in r["cakes"]:
@@ -427,10 +428,10 @@ class CatCakePlugin(Star):
                     if composite_path:
                         chain.append(Image.fromFileSystem(composite_path))
 
-            yield event.chain_result(chain)
-
             if i < len(results):
-                await asyncio.sleep(0.3)
+                chain.append(Plain("\n"))
+
+        yield event.chain_result(chain)
 
     # ── /登记猫猫糕 ───────────────────────────────────────────────────
     @filter.command("登记猫猫糕")
