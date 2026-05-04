@@ -297,6 +297,12 @@ class CatCakePlugin(Star):
 
         server_input = self.config.get("default_server", "官服")
         query_input = None
+        user_limit = None
+
+        # Check if last part is a count number (1-9, capped)
+        if parts and parts[-1].isdigit():
+            user_limit = min(int(parts[-1]), 9)
+            parts = parts[:-1]
 
         if len(parts) >= 2:
             first = parts[0]
@@ -311,13 +317,15 @@ class CatCakePlugin(Star):
 
         if not query_input:
             yield event.plain_result(
-                "用法：/找猫糕 <服务器> <角色名/猫猫糕名>\n"
+                "用法：/找猫糕 <服务器> <角色名/猫猫糕名> [数量]\n"
                 "例如：\n"
                 "  /找猫糕 官服 丹恒\n"
+                "  /找猫糕 官服 丹恒 5      (查询5条)\n"
                 "  /找猫糕 B服 姬子\n"
                 "  /找猫糕 全部 阿基维利\n"
-                "  /找猫糕 糯米团  (使用默认服务器)\n\n"
-                "可用服务器：官服 B服 亚服 美服 欧服 港澳台 其他 全部"
+                "  /找猫糕 糯米团           (使用默认服务器)\n\n"
+                "可用服务器：官服 B服 亚服 美服 欧服 港澳台 其他 全部\n"
+                "数量上限：9"
             )
             return
 
@@ -334,7 +342,7 @@ class CatCakePlugin(Star):
             return
 
         server_label = SERVER_LABELS.get(server, server)
-        limit = self.config.get("default_limit", 3)
+        limit = user_limit or self.config.get("default_limit", 3)
         send_img = self.config.get("send_images", True)
 
         yield event.plain_result(f"正在查询 [{server_label}] 的「{cake_name}」...")

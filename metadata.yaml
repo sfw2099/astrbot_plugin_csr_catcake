@@ -1,7 +1,7 @@
 name: astrbot_plugin_csr_catcake
 display_name: 星穹铁道猫猫糕查询
 desc: 查询/登记/删除猫猫糕，支持角色名搜索和阿基喵利今日限定，返回UID及猫猫糕拼图。
-help: /找猫糕 服务器 角色/猫猫糕 | /登记猫猫糕 玩家名 UID 猫猫糕1 猫猫糕2 猫猫糕3 | /登记阿基喵利 玩家名 UID | /删除猫猫糕 UID
-version: v1.2.1
+help: /找猫糕 服务器 角色/猫猫糕 [数量] | /登记猫猫糕 玩家名 UID 猫猫糕1 猫猫糕2 猫猫糕3 | /登记阿基喵利 玩家名 UID | /删除猫猫糕 UID
+version: v1.2.2
 author: ALin
 repo: https://github.com/sfw2099/astrbot_plugin_csr_catcake
