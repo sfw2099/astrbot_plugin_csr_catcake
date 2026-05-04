@@ -1,0 +1,23 @@
+{
+    "default_server": {
+        "type": "string",
+        "title": "默认服务器",
+        "description": "未指定服务器时的默认查询服务器",
+        "hint": "官服 / B服 / 亚服 / 美服 / 欧服 / 港澳台 / 其他 / 全部",
+        "default": "官服",
+        "options": ["官服", "B服", "亚服", "美服", "欧服", "港澳台", "其他", "全部"]
+    },
+    "default_limit": {
+        "type": "int",
+        "title": "默认返回条数",
+        "description": "每次查询最多返回的记录数",
+        "default": 3,
+        "slider": {"min": 1, "max": 10, "step": 1}
+    },
+    "send_images": {
+        "type": "bool",
+        "title": "发送图片",
+        "description": "是否下载并发送猫猫糕和尾巴图片（关闭则只发送文字链接）",
+        "default": true
+    }
+}
