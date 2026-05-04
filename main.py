@@ -68,7 +68,7 @@ CAKES = [
 
 
 @register("astrbot_plugin_csr_catcake", "ALin",
-          "星穹铁道猫猫糕查询 - /找猫糕 服务器 角色/猫猫糕", "1.0.2")
+          "星穹铁道猫猫糕查询 - /找猫糕 服务器 角色/猫猫糕", "1.1.0")
 class CatCakePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -153,58 +153,36 @@ class CatCakePlugin(Star):
             logger.warning(f"[catcake] download failed: {url} -> {e}")
         return False
 
-    def _compose_card(self, cells, record_id, tmpdir):
+    def _compose_card(self, cake_paths, record_id, tmpdir):
         """
-        Compose cake + tail images into a single card:
-          [Cake1] [Cake2] [Cake3]   <- top row
-          [Tail1] [Tail2] [Tail3]   <- bottom row
-        Original sizes: cake ~200x186, tail ~49x37.
+        Compose cat cake images into a single row card (white background).
+        Original size: ~200x186, scaled to 180 wide.
         """
         from PIL import Image
 
-        n = len(cells)
+        n = len(cake_paths)
         cell_w = 180
-        cake_h = 167       # ~200x186 scaled to 180 wide
-        tail_h = 120       # tail scaled up ~2.4x, centered in cell
+        cake_h = 167
         padding = 8
         gap = 6
-        row_gap = 4
 
         total_w = cell_w * n + gap * (n - 1) + padding * 2
-        total_h = cake_h + row_gap + tail_h + padding * 2
+        total_h = cake_h + padding * 2
 
         canvas = Image.new("RGBA", (total_w, total_h), (255, 255, 255, 255))
 
-        for col, (cake_path, tail_path, cake_name, char_name) in enumerate(cells):
+        for col, path in enumerate(cake_paths):
             x = padding + col * (cell_w + gap)
-            y_cake = padding
-            y_tail = padding + cake_h + row_gap
-
-            # Cake image: scale to cell width, preserve aspect ratio
             try:
-                img = Image.open(cake_path).convert("RGBA")
+                img = Image.open(path).convert("RGBA")
                 orig_w, orig_h = img.size
                 scale = cell_w / orig_w
                 new_h = int(orig_h * scale)
                 img = img.resize((cell_w, new_h), Image.LANCZOS)
-                # center vertically in cake row
-                y_off = y_cake + (cake_h - new_h) // 2
+                y_off = padding + (cake_h - new_h) // 2
                 canvas.paste(img, (x, y_off), img)
             except Exception as e:
                 logger.warning(f"[catcake] paste cake failed: {e}")
-
-            # Tail image: scale to 3x original, center in tail cell
-            try:
-                img = Image.open(tail_path).convert("RGBA")
-                tw, th = img.size
-                scale = 3.0
-                nw, nh = int(tw * scale), int(th * scale)
-                img = img.resize((nw, nh), Image.LANCZOS)
-                clean = Image.new("RGBA", (cell_w, tail_h), (0, 0, 0, 0))
-                clean.paste(img, ((cell_w - nw) // 2, (tail_h - nh) // 2), img)
-                canvas.paste(clean, (x, y_tail), clean)
-            except Exception as e:
-                logger.warning(f"[catcake] paste tail failed: {e}")
 
         out_path = os.path.join(tmpdir, f"card_{record_id}.png")
         canvas.save(out_path, "PNG")
@@ -300,10 +278,10 @@ class CatCakePlugin(Star):
             anji_note = " [今日限定]" if r.get("isAnji") else ""
             text = f"{i}. {r['name']}{anji_note} | UID: {r['uid']} | {tag}\n"
             text += f"   猫猫糕：{'、'.join(r['cakes'])}"
-            yield event.plain_result(text)
 
+            chain = [Plain(text)]
             if send_img:
-                cells = []
+                cake_paths = []
                 for cn in r["cakes"]:
                     cn = (cn or "").strip()
                     if not cn:
@@ -311,27 +289,17 @@ class CatCakePlugin(Star):
                     ci = self.cake_lookup.get(cn)
                     if not ci:
                         continue
-                    char_name = ci["r"].split("_")[0]
                     cake_url = BASE_URL + ci["s"]
-                    tail_url = f"{BASE_URL}img/tail/尾巴_{char_name}.png"
-
                     cake_path = os.path.join(tmpdir, f"cake_{r['id']}_{ci['n']}.png")
-                    tail_path = os.path.join(tmpdir, f"tail_{r['id']}_{char_name}.png")
+                    if await self._download_image(cake_url, cake_path):
+                        cake_paths.append(cake_path)
 
-                    dl1 = await self._download_image(cake_url, cake_path)
-                    dl2 = await self._download_image(tail_url, tail_path)
-
-                    if dl1 and dl2:
-                        cells.append((cake_path, tail_path, cn, char_name))
-                    elif not dl1 and not dl2:
-                        yield event.plain_result(
-                            f"  {cn}: {cake_url}\n  尾巴: {tail_url}"
-                        )
-
-                if cells:
-                    composite_path = self._compose_card(cells, r["id"], tmpdir)
+                if cake_paths:
+                    composite_path = self._compose_card(cake_paths, r["id"], tmpdir)
                     if composite_path:
-                        yield event.image_result(composite_path)
+                        chain.append(Image.fromFileSystem(composite_path))
+
+            yield event.chain_result(chain)
 
             if i < len(results):
                 await asyncio.sleep(0.3)
