@@ -1,17 +1,20 @@
 # -*- coding: utf-8 -*-
 import os
-import ssl
+import re
+import json
+import string
+import random
 import aiohttp
 import asyncio
-from urllib.parse import quote
 
 from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.api import logger, AstrBotConfig
 from astrbot.api.all import Plain, Image, MessageChain
 
 API_URL = "https://catcake.hoshimi.io/api/records"
 BASE_URL = "https://catcake.hoshimi.io/"
+ANJI_CAKE = "阿基喵利"
 
 SERVER_RULES = {
     "cn": lambda u: u[0] in "123" and len(u) == 9,
@@ -68,7 +71,7 @@ CAKES = [
 
 
 @register("astrbot_plugin_csr_catcake", "ALin",
-          "星穹铁道猫猫糕查询 - /找猫糕 服务器 角色/猫猫糕", "1.1.0")
+          "星穹铁道猫猫糕查询 - /找猫糕 /登记猫猫糕 /删除猫猫糕", "1.2.0")
 class CatCakePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -78,7 +81,30 @@ class CatCakePlugin(Star):
         for c in CAKES:
             self.char_lookup.setdefault(c["r"], []).append(c["n"])
         self._session = None
+        # SID file in plugin data dir (survives updates)
+        self._data_dir = StarTools.get_data_dir("astrbot_plugin_csr_catcake")
+        self._data_dir.mkdir(parents=True, exist_ok=True)
+        self._sid_file = self._data_dir / "sid.txt"
+        self._sid = None
 
+    # ── SID management (same algorithm as the website) ────────────────
+    def _get_sid(self):
+        if self._sid:
+            return self._sid
+        if self._sid_file.exists():
+            sid = self._sid_file.read_text("utf-8").strip()
+            if re.match(r'^[A-Za-z0-9_\-]{8,128}$', sid):
+                self._sid = sid
+                return sid
+        # Generate new SID
+        chars = string.ascii_letters + string.digits + "-_"
+        sid = "".join(random.choices(chars, k=24))
+        self._sid_file.write_text(sid, "utf-8")
+        self._sid = sid
+        logger.info(f"[catcake] new SID generated")
+        return sid
+
+    # ── Session ───────────────────────────────────────────────────────
     def _get_session(self):
         if self._session is None or self._session.closed:
             connector = aiohttp.TCPConnector(ssl=False)
@@ -86,6 +112,7 @@ class CatCakePlugin(Star):
             self._session = aiohttp.ClientSession(connector=connector, timeout=timeout)
         return self._session
 
+    # ── Server matching ───────────────────────────────────────────────
     def _match_server(self, uid, server):
         uid = str(uid)
         if server == "all":
@@ -102,6 +129,7 @@ class CatCakePlugin(Star):
                 return SERVER_LABELS.get(code, code)
         return SERVER_LABELS["other"]
 
+    # ── Query resolution ──────────────────────────────────────────────
     def _resolve_query(self, query):
         q = query.strip()
         if not q:
@@ -126,6 +154,22 @@ class CatCakePlugin(Star):
             return None, f"「{q}」匹配到多个角色：{'、'.join(char_matches)}，请指定其中一个"
         return None, f"未找到匹配「{q}」的猫猫糕或角色"
 
+    def _resolve_cake_names(self, queries):
+        """Resolve multiple queries to cake names. Returns (names, error)."""
+        names = []
+        for q in queries:
+            q = q.strip()
+            if not q:
+                continue
+            name, err = self._resolve_query(q)
+            if err:
+                return None, err
+            if name in names:
+                return None, f"猫猫糕「{name}」重复了"
+            names.append(name)
+        return names, None
+
+    # ── API calls ─────────────────────────────────────────────────────
     async def _fetch_records(self):
         session = self._get_session()
         try:
@@ -139,6 +183,65 @@ class CatCakePlugin(Star):
             logger.error(f"[catcake] API fetch error: {e}")
             return []
 
+    async def _api_post(self, payload):
+        """POST /api/records to create or update a record."""
+        sid = self._get_sid()
+        session = self._get_session()
+        headers = {
+            "Content-Type": "application/json",
+            "Cookie": f"hsr_sid={sid}",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Origin": "https://catcake.hoshimi.io",
+            "Referer": "https://catcake.hoshimi.io/",
+        }
+        try:
+            async with session.post(API_URL, json=payload, headers=headers) as resp:
+                data = await resp.json(content_type=None)
+                if resp.status != 200:
+                    err = (data or {}).get("error", f"HTTP {resp.status}")
+                    raise Exception(err)
+                return data.get("record")
+        except aiohttp.ClientError as e:
+            raise Exception(f"网络错误: {e}")
+
+    async def _api_delete(self, record_id):
+        """DELETE /api/records/:id."""
+        sid = self._get_sid()
+        session = self._get_session()
+        headers = {
+            "Cookie": f"hsr_sid={sid}",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Origin": "https://catcake.hoshimi.io",
+            "Referer": "https://catcake.hoshimi.io/",
+        }
+        try:
+            async with session.delete(f"{API_URL}/{record_id}", headers=headers) as resp:
+                data = await resp.json(content_type=None)
+                if resp.status != 200:
+                    err = (data or {}).get("error", f"HTTP {resp.status}")
+                    raise Exception(err)
+                return True
+        except aiohttp.ClientError as e:
+            raise Exception(f"网络错误: {e}")
+
+    async def _api_delete(self, record_id):
+        """DELETE /api/records/:id."""
+        sid = self._get_sid()
+        session = self._get_session()
+        headers = {"Cookie": f"hsr_sid={sid}"}
+        try:
+            async with session.delete(f"{API_URL}/{record_id}", headers=headers) as resp:
+                data = await resp.json(content_type=None)
+                if resp.status != 200:
+                    err = (data or {}).get("error", f"HTTP {resp.status}")
+                    raise Exception(err)
+                return True
+        except aiohttp.ClientError as e:
+            raise Exception(f"网络错误: {e}")
+
+    # ── Image helpers ─────────────────────────────────────────────────
     async def _download_image(self, url, path):
         session = self._get_session()
         try:
@@ -154,10 +257,6 @@ class CatCakePlugin(Star):
         return False
 
     def _compose_card(self, cake_paths, record_id, tmpdir):
-        """
-        Compose cat cake images into a single row card (white background).
-        Original size: ~200x186, scaled to 180 wide.
-        """
         from PIL import Image
 
         n = len(cake_paths)
@@ -188,20 +287,18 @@ class CatCakePlugin(Star):
         canvas.save(out_path, "PNG")
         return out_path
 
+    # ── /找猫糕 ───────────────────────────────────────────────────────
     @filter.command("找猫糕")
     async def find_catcake(self, event: AstrMessageEvent):
         msg = event.message_str.strip()
         parts = msg.split()
-        # Remove the command itself
         if parts and parts[0] in ("找猫糕", "/找猫糕"):
             parts = parts[1:]
 
         server_input = self.config.get("default_server", "官服")
         query_input = None
-        extra_limit = None
 
         if len(parts) >= 2:
-            # Check if first part is a known server
             first = parts[0]
             svr = SERVER_ALIASES.get(first) or SERVER_ALIASES.get(first.lower())
             if svr:
@@ -219,12 +316,11 @@ class CatCakePlugin(Star):
                 "  /找猫糕 官服 丹恒\n"
                 "  /找猫糕 B服 姬子\n"
                 "  /找猫糕 全部 阿基维利\n"
-                "  /找猫糕 糯米团  （使用默认服务器）\n\n"
+                "  /找猫糕 糯米团  (使用默认服务器)\n\n"
                 "可用服务器：官服 B服 亚服 美服 欧服 港澳台 其他 全部"
             )
             return
 
-        # Resolve server
         server = SERVER_ALIASES.get(server_input)
         if not server:
             server = SERVER_ALIASES.get(server_input.lower())
@@ -232,7 +328,6 @@ class CatCakePlugin(Star):
             yield event.plain_result(f"未知服务器：{server_input}")
             return
 
-        # Resolve query
         cake_name, err = self._resolve_query(query_input)
         if err:
             yield event.plain_result(err)
@@ -242,9 +337,7 @@ class CatCakePlugin(Star):
         limit = self.config.get("default_limit", 3)
         send_img = self.config.get("send_images", True)
 
-        yield event.plain_result(
-            f"正在查询 [{server_label}] 的「{cake_name}」..."
-        )
+        yield event.plain_result(f"正在查询 [{server_label}] 的「{cake_name}」...")
 
         records = await self._fetch_records()
         if not records:
@@ -264,11 +357,10 @@ class CatCakePlugin(Star):
         if not results:
             yield event.plain_result(
                 f"在 [{server_label}] 中未找到「{cake_name}」的记录。\n"
-                "（记录每周一服务器时间04:00重置）"
+                "(记录每周一服务器时间04:00重置)"
             )
             return
 
-        # Output results
         import tempfile
         tmpdir = os.path.join(tempfile.gettempdir(), "astrbot_catcake")
         os.makedirs(tmpdir, exist_ok=True)
@@ -303,6 +395,169 @@ class CatCakePlugin(Star):
 
             if i < len(results):
                 await asyncio.sleep(0.3)
+
+    # ── /登记猫猫糕 ───────────────────────────────────────────────────
+    @filter.command("登记猫猫糕")
+    async def register_catcake(self, event: AstrMessageEvent):
+        msg = event.message_str.strip()
+        parts = msg.split()
+        if parts and parts[0] in ("登记猫猫糕", "/登记猫猫糕"):
+            parts = parts[1:]
+
+        if len(parts) < 5:
+            yield event.plain_result(
+                "用法：/登记猫猫糕 <玩家名> <UID> <猫猫糕1> <猫猫糕2> <猫猫糕3>\n"
+                "例如：/登记猫猫糕 开拓者 123456789 糯米团 芝麻酥 冰糕\n\n"
+                "注：UID为9位数字(官服/B服/美服/欧服/港澳台)\n"
+                "    或18开头的10位数字(亚服)"
+            )
+            return
+
+        player_name = parts[0]
+        uid = parts[1]
+        cake_queries = parts[2:]
+
+        # Validate UID
+        if not re.match(r'^\d{9}$', uid) and not re.match(r'^18\d{8}$', uid):
+            yield event.plain_result(
+                f"UID「{uid}」格式不正确。UID须为9位数字，或18开头的10位数字。"
+            )
+            return
+
+        # Validate player name
+        if len(player_name) > 20:
+            yield event.plain_result("玩家名不能超过20个字符。")
+            return
+
+        # Resolve cake names (allow 2-3, since Anji is a separate command)
+        if len(cake_queries) < 2 or len(cake_queries) > 3:
+            yield event.plain_result("请指定2~3个猫猫糕。登记阿基喵利请使用 /登记阿基喵利。")
+            return
+
+        cake_names, err = self._resolve_cake_names(cake_queries)
+        if err:
+            yield event.plain_result(err)
+            return
+
+        if ANJI_CAKE in cake_names:
+            yield event.plain_result("阿基喵利只能单独登记，请使用 /登记阿基喵利 命令。")
+            return
+
+        # Pad to 3 slots (site expects exactly 3)
+        while len(cake_names) < 3:
+            cake_names.append("")
+
+        payload = {
+            "name": player_name,
+            "uid": uid,
+            "cakes": cake_names[:3],
+            "isAnji": False,
+        }
+
+        try:
+            record = await self._api_post(payload)
+            yield event.plain_result(
+                f"登记成功！\n"
+                f"玩家：{player_name} | UID: {uid}\n"
+                f"猫猫糕：{'、'.join(c for c in cake_names if c)}"
+            )
+        except Exception as e:
+            yield event.plain_result(f"登记失败：{e}")
+
+    # ── /登记阿基喵利 ─────────────────────────────────────────────────
+    @filter.command("登记阿基喵利")
+    async def register_anji(self, event: AstrMessageEvent):
+        msg = event.message_str.strip()
+        parts = msg.split()
+        if parts and parts[0] in ("登记阿基喵利", "/登记阿基喵利"):
+            parts = parts[1:]
+
+        if len(parts) < 2:
+            yield event.plain_result(
+                "用法：/登记阿基喵利 <玩家名> <UID>\n"
+                "例如：/登记阿基喵利 开拓者 123456789\n\n"
+                "阿基喵利为今日限定猫猫糕，记录在每天凌晨4:00自动清除。"
+            )
+            return
+
+        player_name = parts[0]
+        uid = parts[1]
+
+        if not re.match(r'^\d{9}$', uid) and not re.match(r'^18\d{8}$', uid):
+            yield event.plain_result(
+                f"UID「{uid}」格式不正确。UID须为9位数字，或18开头的10位数字。"
+            )
+            return
+
+        if len(player_name) > 20:
+            yield event.plain_result("玩家名不能超过20个字符。")
+            return
+
+        payload = {
+            "name": player_name,
+            "uid": uid,
+            "cakes": [ANJI_CAKE, "", ""],
+            "isAnji": True,
+        }
+
+        try:
+            record = await self._api_post(payload)
+            yield event.plain_result(
+                f"阿基喵利登记成功！\n"
+                f"玩家：{player_name} | UID: {uid}\n"
+                f"今日限定，凌晨4:00自动清除。"
+            )
+        except Exception as e:
+            yield event.plain_result(f"登记失败：{e}")
+
+    # ── /删除猫猫糕 ───────────────────────────────────────────────────
+    @filter.command("删除猫猫糕")
+    async def delete_catcake(self, event: AstrMessageEvent):
+        msg = event.message_str.strip()
+        parts = msg.split()
+        if parts and parts[0] in ("删除猫猫糕", "/删除猫猫糕"):
+            parts = parts[1:]
+
+        if len(parts) < 1:
+            yield event.plain_result(
+                "用法：/删除猫猫糕 <UID>\n"
+                "例如：/删除猫猫糕 123456789\n\n"
+                "只能删除自己登记过的记录。"
+            )
+            return
+
+        uid = parts[0]
+        if not re.match(r'^\d{9}$', uid) and not re.match(r'^18\d{8}$', uid):
+            yield event.plain_result(
+                f"UID「{uid}」格式不正确。"
+            )
+            return
+
+        # Fetch records to find our own by UID
+        records = await self._fetch_records()
+        if not records:
+            yield event.plain_result("未能获取数据，请稍后再试。")
+            return
+
+        own = [r for r in records if str(r.get("uid", "")) == uid and r.get("mine")]
+        if not own:
+            yield event.plain_result(
+                f"未找到UID「{uid}」的登记记录，或该记录不属于本插件。\n"
+                "（只能删除通过本插件登记的记录）"
+            )
+            return
+
+        record = own[0]
+        try:
+            await self._api_delete(record["id"])
+            is_anji = " [阿基喵利]" if record.get("isAnji") else ""
+            yield event.plain_result(
+                f"已删除{is_anji}\n"
+                f"玩家：{record['name']} | UID: {record['uid']}\n"
+                f"猫猫糕：{'、'.join(c for c in record.get('cakes', []) if c)}"
+            )
+        except Exception as e:
+            yield event.plain_result(f"删除失败：{e}")
 
     async def terminate(self):
         if self._session and not self._session.closed:
