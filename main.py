@@ -68,7 +68,7 @@ CAKES = [
 
 
 @register("astrbot_plugin_csr_catcake", "ALin",
-          "星穹铁道猫猫糕查询 - /找猫糕 服务器 角色/猫猫糕", "1.0.1")
+          "星穹铁道猫猫糕查询 - /找猫糕 服务器 角色/猫猫糕", "1.0.2")
 class CatCakePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -158,36 +158,51 @@ class CatCakePlugin(Star):
         Compose cake + tail images into a single card:
           [Cake1] [Cake2] [Cake3]   <- top row
           [Tail1] [Tail2] [Tail3]   <- bottom row
+        Original sizes: cake ~200x186, tail ~49x37.
         """
         from PIL import Image
 
         n = len(cells)
-        cell_w, cell_h = 200, 200
-        padding = 10
+        cell_w = 180
+        cake_h = 167       # ~200x186 scaled to 180 wide
+        tail_h = 120       # tail scaled up ~2.4x, centered in cell
+        padding = 8
         gap = 6
+        row_gap = 4
 
         total_w = cell_w * n + gap * (n - 1) + padding * 2
-        total_h = cell_h * 2 + gap + padding * 2
+        total_h = cake_h + row_gap + tail_h + padding * 2
 
-        canvas = Image.new("RGBA", (total_w, total_h), (32, 32, 36, 255))
+        canvas = Image.new("RGBA", (total_w, total_h), (255, 255, 255, 255))
 
         for col, (cake_path, tail_path, cake_name, char_name) in enumerate(cells):
             x = padding + col * (cell_w + gap)
+            y_cake = padding
+            y_tail = padding + cake_h + row_gap
 
+            # Cake image: scale to cell width, preserve aspect ratio
             try:
                 img = Image.open(cake_path).convert("RGBA")
-                img = img.resize((cell_w, cell_h), Image.LANCZOS)
-                canvas.paste(img, (x, padding), img)
+                orig_w, orig_h = img.size
+                scale = cell_w / orig_w
+                new_h = int(orig_h * scale)
+                img = img.resize((cell_w, new_h), Image.LANCZOS)
+                # center vertically in cake row
+                y_off = y_cake + (cake_h - new_h) // 2
+                canvas.paste(img, (x, y_off), img)
             except Exception as e:
                 logger.warning(f"[catcake] paste cake failed: {e}")
 
+            # Tail image: scale to 3x original, center in tail cell
             try:
                 img = Image.open(tail_path).convert("RGBA")
-                img.thumbnail((cell_w, cell_h), Image.LANCZOS)
                 tw, th = img.size
-                clean = Image.new("RGBA", (cell_w, cell_h), (0, 0, 0, 0))
-                clean.paste(img, ((cell_w - tw) // 2, (cell_h - th) // 2), img)
-                canvas.paste(clean, (x, padding + cell_h + gap), clean)
+                scale = 3.0
+                nw, nh = int(tw * scale), int(th * scale)
+                img = img.resize((nw, nh), Image.LANCZOS)
+                clean = Image.new("RGBA", (cell_w, tail_h), (0, 0, 0, 0))
+                clean.paste(img, ((cell_w - nw) // 2, (tail_h - nh) // 2), img)
+                canvas.paste(clean, (x, y_tail), clean)
             except Exception as e:
                 logger.warning(f"[catcake] paste tail failed: {e}")
 
