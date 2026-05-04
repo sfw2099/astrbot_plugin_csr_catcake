@@ -198,7 +198,7 @@ class CatCakePlugin(Star):
         try:
             async with session.post(API_URL, json=payload, headers=headers) as resp:
                 data = await resp.json(content_type=None)
-                if resp.status != 200:
+                if resp.status not in (200, 201):
                     err = (data or {}).get("error", f"HTTP {resp.status}")
                     raise Exception(err)
                 return data.get("record")
